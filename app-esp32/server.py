@@ -97,6 +97,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "wake_word": DEFAULT_WAKE_WORD,
     "wake_timeout_seconds": DEFAULT_WAKE_TIMEOUT_SECONDS,
     "default_weather_city": "平湖市",
+    "local_music_dirs": [],
     "pairing_token": "",
     "last_cloned_voice": "",
     "last_clone_file": "",
@@ -143,6 +144,9 @@ AUDIO_HEADER_MAGIC = b"NAUD"
 AUDIO_HEADER_SIZE = 16
 AUDIO_TYPE_TTS = 1
 AUDIO_TYPE_MUSIC = 2
+LOCAL_MUSIC_EXTENSIONS = {".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus"}
+LOCAL_MUSIC_SCAN_LIMIT = 6000
+LOCAL_MUSIC_SCAN_SECONDS = 2.5
 LEGACY_PACKAGED_VOICE_IDS = {
     "qwen-omni-vc-YUI-voice-20260626102719419-cdca",
 }
@@ -936,6 +940,156 @@ def stop_music_preview() -> None:
             pass
 
 
+
+def normalize_music_key(value: str) -> str:
+    value = str(value or "").lower()
+    value = re.sub(r"\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）", "", value)
+    return re.sub(r"[\s\-_.,，。！？!?;；:'\"“”‘’《》<>·~]+", "", value)
+
+
+def local_music_dirs() -> list[Path]:
+    candidates: list[str] = []
+    env_dirs = os.environ.get("NEKO_ESP32_MUSIC_DIRS", "")
+    if env_dirs:
+        candidates.extend([d for d in env_dirs.split(os.pathsep) if d.strip()])
+    try:
+        cfg_dirs = load_config().get("local_music_dirs")
+        if isinstance(cfg_dirs, str):
+            candidates.extend([d for d in cfg_dirs.split(os.pathsep) if d.strip()])
+        elif isinstance(cfg_dirs, list):
+            candidates.extend([str(d) for d in cfg_dirs if str(d).strip()])
+    except Exception:
+        pass
+    home = Path.home()
+    candidates.extend([
+        str(DATA_DIR / "music"),
+        str(BASE_DIR / "music"),
+        str(home / "Music"),
+        str(home / "Downloads"),
+        str(home / "Documents" / "Music"),
+        str(home / "Documents" / "音乐"),
+        "/sdcard/Music",
+        "/sdcard/Download",
+        "/sdcard/Downloads",
+        "/storage/emulated/0/Music",
+        "/storage/emulated/0/Download",
+        "/storage/emulated/0/Downloads",
+        str(home / "Documents"),
+    ])
+    seen: set[str] = set()
+    dirs: list[Path] = []
+    for raw in candidates:
+        try:
+            path = Path(os.path.expanduser(str(raw))).resolve()
+            key = str(path)
+            if key in seen or not path.exists() or not path.is_dir():
+                continue
+            seen.add(key)
+            dirs.append(path)
+        except Exception:
+            continue
+    return dirs
+
+
+def local_music_score(query_key: str, file_key: str) -> int:
+    if not query_key or not file_key:
+        return 0
+    if query_key == file_key:
+        return 1000
+    if query_key in file_key:
+        return 800 + min(120, len(query_key) * 4)
+    if file_key in query_key:
+        return 620 + min(80, len(file_key) * 3)
+    tokens = [normalize_music_key(t) for t in re.split(r"[\s,，。._\-]+", query_key) if normalize_music_key(t)]
+    if tokens and all(t in file_key for t in tokens):
+        return 560 + min(80, sum(len(t) for t in tokens) * 2)
+    ordered = 0
+    pos = 0
+    for ch in query_key:
+        idx = file_key.find(ch, pos)
+        if idx < 0:
+            continue
+        ordered += 1
+        pos = idx + 1
+    if len(query_key) >= 2 and ordered >= max(2, int(len(query_key) * 0.75)):
+        return 420 + ordered
+    return 0
+
+
+def find_local_music_file(query: str) -> Path | None:
+    query_key = normalize_music_key(query)
+    if not query_key:
+        return None
+    started = time.monotonic()
+    checked = 0
+    best_path: Path | None = None
+    best_score = 0
+    for base in local_music_dirs():
+        for root, dirs, files in os.walk(base, topdown=True, onerror=lambda exc: None):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in (".git", "__pycache__", "node_modules")]
+            for filename in files:
+                if time.monotonic() - started > LOCAL_MUSIC_SCAN_SECONDS or checked >= LOCAL_MUSIC_SCAN_LIMIT:
+                    update_relay_state(last_event=f"local music scan timeout checked={checked}")
+                    return best_path
+                checked += 1
+                if filename.startswith("."):
+                    continue
+                path = Path(root) / filename
+                if path.suffix.lower() not in LOCAL_MUSIC_EXTENSIONS:
+                    continue
+                score = local_music_score(query_key, normalize_music_key(path.stem))
+                if score > best_score:
+                    best_path = path
+                    best_score = score
+                    if score >= 1000:
+                        return best_path
+    if best_path is not None:
+        update_relay_state(last_event=f"local music hit {best_path.name} score={best_score}")
+    return best_path
+
+
+def display_music_file(path: Path) -> str:
+    name = re.sub(r"[_]+", " ", path.stem).strip()
+    return name or path.name
+
+
+def prepare_local_music_stream(query: str) -> Dict[str, Any] | None:
+    local_path = find_local_music_file(query)
+    if local_path is None:
+        return None
+    ensure_dirs()
+    display = display_music_file(local_path)
+    pcm_path = DATA_DIR / f"music-{uuid.uuid4().hex[:8]}.pcm"
+    try:
+        pcm_path = decode_audio_to_pcm(local_path, pcm_path)
+    except Exception as exc:
+        update_relay_state(last_event=f"local music decode failed: {local_path.name} {exc}")
+        return None
+    return mcp_tool_result(
+        "server.music.play",
+        True,
+        f"播放本地：{display}",
+        {
+            "query": query,
+            "source": "local_music",
+            "music_stream": {
+                "title": display,
+                "audio_path": str(local_path),
+                "pcm_path": str(pcm_path),
+                "bytes": pcm_path.stat().st_size,
+                "sample_rate": MUSIC_PCM_SAMPLE_RATE,
+                "format": "pcm_s16le_mono",
+            },
+        },
+    )
+
+
+def prepare_music_stream(query: str) -> Dict[str, Any]:
+    local = prepare_local_music_stream(query)
+    if local is not None:
+        return local
+    return prepare_online_music_stream(query)
+
 def ffmpeg_bin() -> str:
     found = shutil.which("ffmpeg")
     if found:
@@ -978,8 +1132,9 @@ def download_preview_file(preview_url: str, title: str) -> Path:
     return preview_path
 
 
-def decode_audio_to_pcm(audio_path: Path) -> Path:
-    pcm_path = audio_path.with_suffix(".pcm")
+def decode_audio_to_pcm(audio_path: Path, pcm_path: Path | None = None) -> Path:
+    if pcm_path is None:
+        pcm_path = audio_path.with_suffix(".pcm")
     try:
         decoder = ffmpeg_bin()
     except RuntimeError as ffmpeg_exc:
@@ -1100,7 +1255,7 @@ def tool_music_search(args: Dict[str, Any]) -> Dict[str, Any]:
 def tool_music_play(args: Dict[str, Any]) -> Dict[str, Any]:
     query = str(args.get("query") or "").strip()
     stop_music_preview()
-    return prepare_online_music_stream(query)
+    return prepare_music_stream(query)
 
 
 def tool_music_pause(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -1921,9 +2076,30 @@ async def relay_session(esp32, path: str | None = None) -> None:
         await send_device({"relay_type": "control", "command": "clear_audio"})
         await send_device({"relay_type": "control", "command": "start_record"})
 
+    def music_is_active() -> bool:
+        return music_task is not None and not music_task.done()
+
+    async def cancel_model_response_only(reason: str) -> None:
+        nonlocal tts_started, listening, wake_response_cancelled
+        wake_response_cancelled = True
+        if dashscope is not None:
+            try:
+                await send_json_ws(dashscope, {"type": "response.cancel"})
+            except Exception:
+                pass
+        downsample_state["phase"] = 0
+        if tts_started:
+            tts_started = False
+            await send_device({"type": "tts", "state": "stop"})
+        listening = True
+        update_relay_state(last_event=f"model response cancelled {reason}")
+
     async def stream_music_to_esp32(stream: Dict[str, Any]) -> None:
-        nonlocal listening
+        nonlocal listening, current_turn_allowed, wake_response_cancelled
         listening = bool(wake_word_enabled())
+        if wake_word_enabled():
+            current_turn_allowed = False
+            wake_response_cancelled = False
         try:
             await stream_music_to_esp32_socket(esp32, session_id, stream, allow_record=bool(wake_word_enabled()), send_audio=send_audio_frame)
         finally:
@@ -1981,28 +2157,32 @@ async def relay_session(esp32, path: str | None = None) -> None:
             downsample_state["phase"] = 0
             await send_device({"type": "tts", "state": "stop"})
             await send_device({"relay_type": "control", "command": "clear_audio"})
-        listening = False
+        listening = True
         await send_device({"type": "status", "state": "tool_running", "tool": name})
         result = await asyncio.to_thread(call_server_tool, name, args)
-        listening = True
         message = result.get("message") or "工具已执行"
         data = result.get("data") if isinstance(result.get("data"), dict) else {}
+
         if name == "server.music.play" and result.get("ok") and isinstance(data, dict):
             stream = data.get("music_stream")
             if isinstance(stream, dict):
-                pending_music_stream = stream
-                suppress_next_done_music = True
+                pending_music_stream = None
+                suppress_next_done_music = False
                 title = str(stream.get("title") or "音乐").strip()
                 if memory_enabled():
                     add_music_history(title, str(args.get("query") or ""), user_text)
-                message = f"马上播放{title}"
-        elif name == "server.music.pause":
+                await send_device({"type": "status", "state": "music_prepare_done", "title": title, "message": f"播放{title}"})
+                await start_music_stream_task(stream)
+                return
+
+        if name == "server.music.pause":
             await stop_music_stream("pause")
+            await send_device({"type": "status", "state": "tool_result", "message": message})
+            return
+
         try:
             if name == "server.weather.query":
                 prompt = f"请直接照读这句话，不要改写，不要加字：{message}"
-            elif name.startswith("server.music."):
-                prompt = f"请直接说：{message}"
             else:
                 prompt = f"工具结果：{message}。只用中文口语回复，不超过16字。"
             await send_json_ws(dashscope, {"type": "conversation.item.create", "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": prompt}]}})
@@ -2036,7 +2216,7 @@ async def relay_session(esp32, path: str | None = None) -> None:
             "model": model, "modalities": ["text", "audio"], "voice": voice,
             "input_audio_format": "pcm", "output_audio_format": "pcm",
             "instructions": instructions,
-            "turn_detection": {"type": "server_vad", "threshold": 0.5, "silence_duration_ms": 300, "prefix_padding_ms": 50},
+            "turn_detection": {"type": "server_vad", "threshold": 0.45, "silence_duration_ms": 220, "prefix_padding_ms": 30},
         }})
         await send_runtime_to_device()
         await send_device({"type": "status", "state": "ready", "voice": voice, "model": model})
@@ -2090,25 +2270,37 @@ async def relay_session(esp32, path: str | None = None) -> None:
                 data = json.loads(raw)
                 event_type = data.get("type", "")
                 if event_type == "input_audio_buffer.speech_started":
+                    if music_is_active() and wake_word_enabled():
+                        current_turn_allowed = False
+                        wake_response_cancelled = False
+                        update_relay_state(last_event="music speech heard, waiting for wake word")
+                        continue
                     current_turn_allowed = (not wake_word_enabled()) or wake_is_active()
                     wake_response_cancelled = False
                     if interrupt_enabled() and (current_turn_allowed or tts_started):
                         await stop_current_response("user_speech_started")
+                if event_type in ("conversation.item.input_audio_transcription.delta", "input_audio_buffer.transcription.delta"):
+                    delta_text = str(data.get("delta") or data.get("text") or data.get("transcript") or "")
+                    if delta_text and wake_word_enabled() and music_task is not None and not music_task.done() and text_has_wake_word(delta_text, wake_word_value()):
+                        await stop_music_stream("wake_word_delta")
+                        await mark_awake("wake_word_delta")
+                    continue
                 if event_type == "conversation.item.input_audio_transcription.completed":
                     text = data.get("transcript", "")
                     await send_device({"type": "stt", "text": text})
                     if wake_word_enabled():
                         wake_now = text_has_wake_word(text, wake_word_value())
                         music_active = music_task is not None and not music_task.done()
+                        if music_active and not wake_now:
+                            current_turn_allowed = False
+                            await cancel_model_response_only("music_wake_required")
+                            print(f"[Wake] music ignored, say {wake_word_value()}: {text}")
+                            continue
                         if (wake_now or wake_is_active()) and text_has_sleep_command(text):
                             wake_active_until = 0.0
                             current_turn_allowed = False
                             await stop_music_stream("sleep_command")
                             await cancel_sleeping_response("sleep_command")
-                            continue
-                        if music_active and not wake_now:
-                            current_turn_allowed = False
-                            print(f"[Wake] music ignored, say {wake_word_value()}: {text}")
                             continue
                         if wake_now:
                             if music_active:
@@ -2144,6 +2336,10 @@ async def relay_session(esp32, path: str | None = None) -> None:
                     await send_device({"type": "error", "message": data.get("message") or json.dumps(data, ensure_ascii=False)})
 
                 if event_type == "response.audio.delta":
+                    if music_is_active() and wake_word_enabled() and not current_turn_allowed:
+                        if not wake_response_cancelled:
+                            await cancel_model_response_only("music_wake_required")
+                        continue
                     if wake_word_enabled() and not current_turn_allowed:
                         if not wake_response_cancelled:
                             await cancel_sleeping_response("wake_word_required")
