@@ -1,14 +1,23 @@
 .DS_Store
 
-# Runtime secrets and local state
-app/server/data/config.json
-app/server/data/memory.json
-app/server/data/location.json
-app/server/data/uploads/
-**/data/config.json
-**/data/memory.json
-**/data/location.json
-**/uploads/
+# Runtime secrets and private state
+app-esp32/data/config.json
+app-esp32/data/memory.json
+app-esp32/data/location.json
+app-esp32/data/uploads/
+ESP32_AI_LLM-master/**/config.json
+ESP32_AI_LLM-master/**/audio_logs/
+
+# Backup files that may contain old credentials
+*.bak
+*.bak-*
+*.backup
+
+# Archives and generated packages
+*.zip
+*.apk
+*.ipa
+*.idsig
 
 # Python
 __pycache__/
@@ -16,27 +25,14 @@ __pycache__/
 .venv/
 venv/
 
-# Android / Gradle
-.gradle/
-local.properties
-**/build/
-*.apk
-*.aab
-*.idsig
-
-# iOS / Xcode / Briefcase
-DerivedData/
-*.xcarchive
-*.ipa
-*.app
-logs/
-dist/
-
-# ESP-IDF / firmware outputs
-sdkconfig
-managed_components/
+# PlatformIO / ESP32 build outputs
+.pio/
 build/
 *.bin
 *.elf
 *.map
 *.uf2
+
+# IDE / local machine state
+.vscode/.browse.c_cpp.db*
+.vscode/ipch/

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>中转站配置</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,sans-serif;background:#111;color:#eee;display:flex;justify-content:center;padding:20px}
+.c{background:#1a1a2e;border-radius:12px;padding:24px;max-width:420px;width:100%}
+h2{font-size:1.2rem;margin-bottom:16px}
+label{display:block;font-size:.8rem;color:#aaa;margin:12px 0 4px}
+input,select{width:100%;padding:10px;border-radius:8px;border:1px solid #333;background:#222;color:#fff;font-size:.9rem}
+.btn{width:100%;padding:12px;margin-top:16px;border:none;border-radius:8px;background:#4f46e5;color:#fff;font-size:1rem;cursor:pointer}
+.msg{margin-top:12px;font-size:.85rem;color:#4ade80}
+select{appearance:none}
+</style>
+</head>
+<body>
+<div class="c">
+<h2>🔧 中转站配置</h2>
+<label>DashScope API Key</label>
+<input id="key" placeholder="DASHSCOPE_API_KEY_PLACEHOLDER">
+<label>音色 (Voice ID)</label>
+<select id="voice">
+<option value="Tina">🌸 Tina - 甜美女声 (推荐)</option>
+	<option value="Ethan">☀️ Ethan - 阳光男声</option>
+</select>
+<label>或自定义克隆音色ID</label>
+<input id="custom_voice" placeholder="custom_xxxx">
+<label>模型</label>
+<select id="model">
+<option value="qwen3.5-omni-flash-realtime">qwen3.5-omni-flash (推荐)</option>
+<option value="qwen3-omni-flash-realtime">qwen3-omni-flash</option>
+<option value="qwen3.5-omni-plus-realtime">qwen3.5-omni-plus</option>
+</select>
+<button class="btn" onclick="save()">💾 保存</button>
+<div class="msg" id="msg"></div>
+</div>
+<script>
+async function load(){
+    try{const r=await fetch('/config');const d=await r.json();
+        document.getElementById('key').value=d.api_key||'';
+        const v=d.voice||'Tina';
+        const s=document.getElementById('voice');
+        let found=false;
+        for(let o of s.options){if(o.value===v){o.selected=true;found=true;break;}}
+        if(!found)document.getElementById('custom_voice').value=v;
+        document.getElementById('model').value=d.model||'qwen3.5-omni-flash-realtime';
+    }catch(e){}
+}
+async function save(){
+    const sel=document.getElementById('voice');
+    const voice=document.getElementById('custom_voice').value.trim()||sel.value;
+    const data={api_key:document.getElementById('key').value.trim(),voice:voice,model:document.getElementById('model').value};
+    try{
+        const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+        if(r.ok){document.getElementById('msg').textContent='✅ 已保存！重启 server.py 生效'}
+        else{document.getElementById('msg').textContent='❌ 保存失败'}
+    }catch(e){document.getElementById('msg').textContent='❌ '+e.message}
+}
+load();
+</script>
+</body>
+</html>

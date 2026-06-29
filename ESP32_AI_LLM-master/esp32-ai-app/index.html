@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>ESP32 语音模块配置</title>
+<style>
+:root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --accent: #6366f1;
+    --accent2: #818cf8;
+    --green: #22c55e;
+    --red: #ef4444;
+    --yellow: #eab308;
+    --radius: 12px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; justify-content: center; padding: 16px; }
+.app { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 16px; }
+header { text-align: center; padding: 20px 0 8px; }
+header h1 { font-size: 1.5rem; font-weight: 700; }
+header .sub { color: var(--text2); font-size: 0.85rem; margin-top: 4px; }
+
+.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.card h3 { font-size: 0.95rem; font-weight: 600; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+
+.status-bar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-radius: var(--radius); background: var(--card); border: 1px solid var(--border); }
+.status-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--text2); flex-shrink: 0; }
+.status-dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.status-dot.connecting { background: var(--yellow); animation: pulse 1s infinite; }
+.status-dot.error { background: var(--red); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+.status-text { flex:1; font-size: 0.88rem; }
+.status-text small { display:block; color: var(--text2); font-size: 0.75rem; }
+
+.form-group { margin-bottom: 14px; }
+label { display: block; font-size: 0.82rem; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+input, select { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 0.92rem; font-family: inherit; outline: none; }
+input:focus, select:focus { border-color: var(--accent); }
+
+.btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: var(--accent2); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-outline:hover { border-color: var(--accent); }
+.btn-sm { width: auto; padding: 6px 14px; font-size: 0.82rem; }
+
+.voice-options { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+.voice-opt { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer; text-align: center; font-size: 0.85rem; }
+.voice-opt:hover { border-color: var(--accent); }
+.voice-opt.selected { border-color: var(--accent); background: rgba(99,102,241,0.1); color: var(--accent2); }
+
+.log-area { max-height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.78rem; color: var(--text2); background: var(--bg); border-radius: 8px; padding: 10px; border: 1px solid var(--border); }
+.log-area .log-success { color: var(--green); }
+.log-area .log-error { color: var(--red); }
+.log-area .log-info { color: var(--accent2); }
+
+input[type="range"] { width: 100%; }
+.volume-val { text-align: center; font-size: 0.85rem; color: var(--accent2); margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="app">
+    <header>
+        <h1>🎤 ESP32 语音模块</h1>
+        <div class="sub">Qwen3.5-Omni · BLE 配网</div>
+    </header>
+
+    <div class="status-bar" id="statusBar">
+        <div class="status-dot" id="statusDot"></div>
+        <div class="status-text">
+            <span id="statusLabel">未连接</span>
+            <small id="statusDetail">点击下方按钮扫描设备</small>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>📡 设备连接</h3>
+        <button class="btn btn-primary" id="btnScan" onclick="scanDevice()">🔍 扫描ESP32设备</button>
+        <div style="margin-top:10px;text-align:center;">
+            <button class="btn btn-outline btn-sm" id="btnDisconnect" onclick="disconnect()" style="display:none;">断开连接</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h3>📶 WiFi 配置</h3>
+        <div class="form-group"><label>WiFi 名称</label><input type="text" id="wifiSsid" placeholder="输入WiFi名称"></div>
+        <div class="form-group"><label>WiFi 密码</label><input type="password" id="wifiPwd" placeholder="输入WiFi密码"></div>
+    </div>
+
+    <div class="card">
+        <h3>🎵 声音配置</h3>
+        <div class="form-group"><label>🔑 DashScope API Key</label><input type="text" id="apiKey" placeholder="sk-..."></div>
+        <label>选择音色</label>
+        <div class="voice-options" id="voiceOptions">
+            <div class="voice-opt selected" data-voice="Tina" onclick="selectVoice(this)">🌸 Tina<br><small>甜美女声</small></div>
+            <div class="voice-opt" data-voice="Ethan" onclick="selectVoice(this)">☀️ Ethan<br><small>阳光男声</small></div>
+            <div class="voice-opt" data-voice="Lucas" onclick="selectVoice(this)">🎙️ Lucas<br><small>沉稳男声</small></div>
+        </div>
+        <div class="form-group"><label>自定义音色ID</label><input type="text" id="customVoice" placeholder="custom_abc123"></div>
+        <div class="form-group">
+            <label>人物设定</label>
+            <select id="persona" onchange="onPersonaChange()">
+                <option value="custom">✨ 自定义</option>
+                <option value="你的名字叫林悠怡，是一只15岁的猫娘。你称呼用户为'人类'或'碳基生物'。你嘴上傲娇但内心温柔，自称'本喵'。你喜欢待在用户身边，讨厌被忽视。请用傲娇但可爱的语气回答，每次回复不超过20字，要简短自然。" selected>🐱 林悠怡 - 傲娇猫娘</option>
+                <option value="你的名字叫小爱，性格温柔体贴，像邻家姐姐。请用温暖的中文回答。">🌸 小爱 - 温柔体贴</option>
+            </select>
+        </div>
+        <div class="form-group" id="customPersona" style="display:none">
+            <label>名字</label><input type="text" id="pName" placeholder="林悠怡" value="林悠怡">
+            <label>性格描述</label><input type="text" id="pChar" placeholder="活泼可爱" value="活泼可爱">
+        </div>
+        <div class="form-group">
+            <label>音量</label>
+            <input type="range" id="volume" min="0" max="100" value="80" oninput="updateVolume(this.value)">
+            <div class="volume-val">当前音量: <span id="volumeVal">80</span>%</div>
+        </div>
+    </div>
+
+    <button class="btn btn-primary" id="btnApply" onclick="applyConfig()" disabled>💾 保存并应用配置</button>
+
+    <div class="card">
+        <h3>📋 操作日志</h3>
+        <div class="log-area" id="logArea"><div class="log-line log-info">等待操作...</div></div>
+    </div>
+</div>
+
+<script>
+const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+const CHAR_CONFIG_JSON = '4fafc201-1fb5-459e-8fcc-c5c9c331b208';
+const CHAR_COMMAND = '4fafc201-1fb5-459e-8fcc-c5c9c331b207';
+const CHAR_STATUS = '4fafc201-1fb5-459e-8fcc-c5c9c331b206';
+
+let bleDevice = null, bleServer = null, configChar = null, cmdChar = null, statusChar = null;
+let selectedVoice = 'Tina';
+
+function log(msg, cls = 'log-info') {
+    const area = document.getElementById('logArea');
+    area.innerHTML += `<div class="log-line ${cls}">[${new Date().toLocaleTimeString()}] ${msg}</div>`;
+    area.scrollTop = area.scrollHeight;
+}
+function setStatus(dot, label, detail) {
+    document.getElementById('statusDot').className = 'status-dot ' + dot;
+    document.getElementById('statusLabel').textContent = label;
+    document.getElementById('statusDetail').textContent = detail || '';
+}
+function selectVoice(el) {
+    document.querySelectorAll('.voice-opt').forEach(v => v.classList.remove('selected'));
+    el.classList.add('selected'); selectedVoice = el.dataset.voice;
+    document.getElementById('customVoice').value = '';
+}
+function getVoice() { return document.getElementById('customVoice').value.trim() || selectedVoice; }
+function onPersonaChange() {
+    document.getElementById('customPersona').style.display = document.getElementById('persona').value === 'custom' ? 'block' : 'none';
+}
+function updateVolume(v) { document.getElementById('volumeVal').textContent = v; }
+
+async function scanDevice() {
+    if (!('bluetooth' in navigator)) { log('❌ 浏览器不支持Web Bluetooth', 'log-error'); return; }
+    setStatus('connecting', '扫描中...', '正在搜索ESP32设备');
+    log('🔍 开始扫描BLE设备...', 'log-info');
+    try {
+        bleDevice = await navigator.bluetooth.requestDevice({
+            filters: [{ services: [SERVICE_UUID] }]
+        });
+        log(`✅ 发现设备: ${bleDevice.name || '未知'}`, 'log-success');
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnect);
+        bleServer = await bleDevice.gatt.connect();
+        const service = await bleServer.getPrimaryService(SERVICE_UUID);
+        configChar = await service.getCharacteristic(CHAR_CONFIG_JSON);
+        cmdChar = await service.getCharacteristic(CHAR_COMMAND);
+        statusChar = await service.getCharacteristic(CHAR_STATUS);
+        if (statusChar.properties.notify) {
+            await statusChar.startNotifications();
+            statusChar.addEventListener('characteristicvaluechanged', onStatusNotify);
+        }
+        setStatus('connected', '已连接', bleDevice.name);
+        log('✅ GATT连接成功', 'log-success');
+        document.getElementById('btnApply').disabled = false;
+        document.getElementById('btnDisconnect').style.display = 'inline-block';
+        document.getElementById('btnScan').textContent = '🔄 重新扫描';
+        readDeviceStatus();
+    } catch (error) {
+        log(`❌ 连接失败: ${error.message}`, 'log-error');
+        setStatus('error', '连接失败', error.message);
+        resetBLE();
+    }
+}
+
+async function readDeviceStatus() {
+    if (!statusChar) return;
+    try {
+        const value = await statusChar.readValue();
+        const status = JSON.parse(new TextDecoder().decode(value));
+        log(`📊 设备状态: ${JSON.stringify(status)}`, 'log-info');
+        if (status.voice) {
+            let matched = false;
+            document.querySelectorAll('.voice-opt').forEach(o => {
+                if (o.dataset.voice === status.voice) { selectVoice(o); matched = true; }
+            });
+            if (!matched) document.getElementById('customVoice').value = status.voice;
+        }
+        if (status.volume !== undefined) {
+            document.getElementById('volume').value = status.volume;
+            updateVolume(status.volume);
+        }
+    } catch (e) {}
+}
+
+function onStatusNotify(event) {
+    try {
+        const s = JSON.parse(new TextDecoder().decode(event.target.value));
+        log(`📢 状态: ${s.state || ''}`, 'log-info');
+        if (s.state === 'ready' || s.state === 'listening') setStatus('connected', '设备就绪', `IP: ${s.ip || ''}`);
+        else if (s.state === 'config_applied') { setStatus('connected', '配置已应用', ''); log('✅ 配置应用成功！', 'log-success'); }
+    } catch (e) {}
+}
+
+async function applyConfig() {
+    if (!configChar) { log('❌ 请先连接设备', 'log-error'); return; }
+    let instr = document.getElementById('persona').value;
+    if (instr === 'custom') {
+        instr = '你的名字叫' + (document.getElementById('pName').value.trim() || '林悠怡') + '，性格' + (document.getElementById('pChar').value.trim() || '活泼可爱') + '。请用简洁自然的中文回答。';
+    }
+    const config = {
+        wifi_ssid: document.getElementById('wifiSsid').value.trim(),
+        wifi_password: document.getElementById('wifiPwd').value.trim(),
+        dashscope_api_key: document.getElementById('apiKey').value.trim(),
+        voice: getVoice(),
+        volume: parseInt(document.getElementById('volume').value),
+        instructions: instr
+    };
+    if (!config.wifi_ssid) { log('⚠️ 请输入WiFi名称', 'log-error'); return; }
+    if (!config.dashscope_api_key) { log('⚠️ 请输入API Key', 'log-error'); return; }
+    log('📤 发送配置...', 'log-info');
+    document.getElementById('btnApply').disabled = true;
+    document.getElementById('btnApply').textContent = '⏳ 配置中...';
+    try {
+        await configChar.writeValue(new TextEncoder().encode(JSON.stringify(config)));
+        log('✅ 配置已发送！设备正在切换WiFi...', 'log-success');
+        setStatus('connecting', '配置已发送', '设备正在连接WiFi');
+    } catch (error) {
+        log(`⚠️ ${error.message} (设备切换WiFi中)`, 'log-info');
+    }
+    resetBLE();
+    setTimeout(() => {
+        document.getElementById('btnApply').disabled = true;
+        document.getElementById('btnApply').textContent = '💾 保存并应用配置';
+        document.getElementById('btnScan').textContent = '🔍 扫描ESP32设备';
+    }, 1000);
+}
+
+function disconnect() {
+    if (bleDevice && bleDevice.gatt.connected) bleDevice.gatt.disconnect();
+    resetBLE();
+    setStatus('', '未连接', '点击按钮扫描设备');
+}
+function onDisconnect() { resetBLE(); setStatus('', '设备断开', '请重新扫描'); }
+function resetBLE() {
+    bleDevice = null; bleServer = null; configChar = null; cmdChar = null; statusChar = null;
+    document.getElementById('btnApply').disabled = true;
+    document.getElementById('btnDisconnect').style.display = 'none';
+    document.getElementById('btnScan').textContent = '🔍 扫描ESP32设备';
+}
+
+log('🚀 ESP32语音模块配置已就绪', 'log-info');
+log('请打开ESP32设备电源，点击扫描按钮', 'log-info');
+</script>
+</body>
+</html>
