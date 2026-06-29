@@ -1,0 +1,5 @@
+
+<resources>
+    <string name="app_name">N.E.K.O_ESP32</string>
+    <string name="server_channel">N.E.K.O_ESP32 服务端</string>
+</resources>

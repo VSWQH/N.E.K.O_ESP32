@@ -1,0 +1,42 @@
+.DS_Store
+
+# Runtime secrets and local state
+app/server/data/config.json
+app/server/data/memory.json
+app/server/data/location.json
+app/server/data/uploads/
+**/data/config.json
+**/data/memory.json
+**/data/location.json
+**/uploads/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Android / Gradle
+.gradle/
+local.properties
+**/build/
+*.apk
+*.aab
+*.idsig
+
+# iOS / Xcode / Briefcase
+DerivedData/
+*.xcarchive
+*.ipa
+*.app
+logs/
+dist/
+
+# ESP-IDF / firmware outputs
+sdkconfig
+managed_components/
+build/
+*.bin
+*.elf
+*.map
+*.uf2

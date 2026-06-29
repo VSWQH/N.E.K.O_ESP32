@@ -1,0 +1,37 @@
+
+[tool.briefcase]
+project_name = "N.E.K.O_ESP32_iOS"
+bundle = "com.neko"
+version = "1.0.0"
+url = "https://local.neko-esp32.invalid"
+license.file = "LICENSE"
+author = "N.E.K.O"
+author_email = "neko@example.invalid"
+
+[tool.briefcase.app.neko_esp32_ios]
+formal_name = "N.E.K.O_ESP32"
+description = "ESP32 voice assistant Python relay server for iOS"
+long_description = "N.E.K.O_ESP32 runs a local Python relay server and configuration UI."
+sources = ["src/neko_esp32_ios"]
+requires = [
+    "websockets==15.0.1",
+]
+icon = "resources/icon"
+template = "/private/tmp/briefcase-ios-template-v0324/briefcase-iOS-Xcode-template-0.3.24"
+
+[tool.briefcase.app.neko_esp32_ios.permission]
+fine_location = "用于给天气 MCP 提供当前位置。"
+photo_library = "用于选择 MP3/WAV 文件进行音色克隆。"
+
+[tool.briefcase.app.neko_esp32_ios.iOS]
+requires = [
+    "toga-iOS~=0.5.0",
+]
+min_os_version = "15.0"
+
+[tool.briefcase.app.neko_esp32_ios.iOS.info]
+NSLocalNetworkUsageDescription = "用于让 ESP32 在同一 Wi-Fi 下连接本机 Python 服务端。"
+NSPhotoLibraryUsageDescription = "用于选择 MP3/WAV 文件进行音色克隆。"
+
+[tool.briefcase.app.neko_esp32_ios.iOS.info.NSAppTransportSecurity]
+NSAllowsLocalNetworking = true
